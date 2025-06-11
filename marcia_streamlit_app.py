@@ -1,21 +1,20 @@
 """
-Marcia News Curator — v3 (cloud‑ready)
-=====================================
+Marcia News Curator — v3.1 (cloud‑ready, fixed)
+==============================================
 
-Funciona tanto **local** como en **Streamlit Community Cloud**.
+Funciona localmente y en **Streamlit Community Cloud**.
 
-* GUI local:
-  ```bash
-  streamlit run marcia_streamlit_app.py
-  ```
-* CLI rápido:
-  ```bash
-  python marcia_streamlit_app.py --url https://ejemplo.com
-  python marcia_streamlit_app.py --img captura.png
-  python marcia_streamlit_app.py --generate-html
-  ```
+### Usar la app gráfica
+```bash
+streamlit run marcia_streamlit_app.py
+```
 
-Las noticias se guardan en `.marcia_cache.json` (máx. 10).
+### CLI rápido
+```bash
+python marcia_streamlit_app.py --url https://ejemplo.com
+python marcia_streamlit_app.py --img captura.png
+python marcia_streamlit_app.py --generate-html
+```
 """
 
 from __future__ import annotations
@@ -29,7 +28,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-# ── Imports condicionales ─────────────────────────────────────────────────
+# ── Importaciones condicionales ───────────────────────────────────────────
 try:
     import streamlit as st  # type: ignore
 except ModuleNotFoundError:
@@ -40,7 +39,6 @@ try:
     import pytesseract
     from pytesseract import TesseractNotFoundError
     from PIL import Image
-
     try:
         pytesseract.get_tesseract_version()
         OCR_AVAILABLE = True
@@ -77,7 +75,7 @@ except ImportError:
 
 api_key = (
     os.getenv("OPENAI_API_KEY")
-    or (st.secrets.get("OPENAI_API_KEY") if st and hasattr(st, "secrets") else "")
+    or (st.secrets["OPENAI_API_KEY"] if st and "OPENAI_API_KEY" in st.secrets else "")
 )
 OPENAI_AVAILABLE = bool(openai and api_key)
 if OPENAI_AVAILABLE:
@@ -93,13 +91,13 @@ TEMPLATE = (
 GROUP_ORDER = {"econpol": 0, "coyuntural": 1, "opinion": 2}
 CACHE_FILE = Path(".marcia_cache.json")
 
-# ── Utilidades ───────────────────────────────────────────────────────────
+# ── Utilidades ------------------------------------------------------------
 
 def classify_article(title: str, body: str) -> str:
     if OPENAI_AVAILABLE:
         prompt = (
-            "Classify the following climate-related news as ECONPOL, COYUNTURAL or OPINION."\
-            f"\nHeadline: {title}\nExcerpt: {body[:500]}"
+            "Classify the following climate news as ECONPOL, COYUNTURAL or OPINION.\n"
+            f"Headline: {title}\nExcerpt: {body[:400]}"
         )
         try:
             resp = openai.ChatCompletion.create(
@@ -126,7 +124,7 @@ def guess_date(s: str | None):
     except Exception:
         return None
 
-# ── Extractores ─────────────────────────────────────────────────────────--
+# ── Extractores -----------------------------------------------------------
 
 def _open_image(src: Any):
     if isinstance(src, (bytes, bytearray)):
@@ -160,10 +158,12 @@ def _scrape_fallback(url: str):
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
         title_tag = soup.find("meta", property="og:title") or soup.find("title")
-        title = (title_tag.get("content") if title_tag and title_tag.get("content") else title_tag.get_text(strip=True)) if title_tag else "Untitled"
+        title = (
+            title_tag.get("content") if title_tag and title_tag.get("content") else title_tag.get_text(strip=True)
+        ) if title_tag else "Untitled"
         body = soup.get_text(" ", strip=True)[:2000]
-        site = soup.find("meta", property="og:site_name")
-        source = site.get("content") if site and site.get("content") else url.split("/")[2]
+        source_tag = soup.find("meta", property="og:site_name")
+        source = source_tag.get("content") if source_tag and source_tag.get("content") else url.split("/")[2]
         date_meta = soup.find("meta", property="article:published_time")
         pub_date = guess_date(date_meta.get("content") if date_meta and date_meta.get("content") else None) or datetime.today().date()
         return {"title": title, "source": source, "date": pub_date, "url": url, "raw_text": body}, ""
@@ -189,7 +189,7 @@ def extract_from_url(url: str) -> Tuple[Dict[str, Any] | None, str]:
     pub_date = guess_date(date_meta.get("content") if date_meta else None) or guess_date(art.publish_date) or datetime.today().date()
     return {"title": title, "source": source, "date": pub_date, "url": url, "raw_text": text}, ""
 
-# ── Persistencia ─────────────────────────────────────────────────────────-
+# ── Persistencia ----------------------------------------------------------
 
 def load_cache() -> List[Dict[str, Any]]:
     if CACHE_FILE.exists():
@@ -200,7 +200,7 @@ def load_cache() -> List[Dict[str, Any]]:
 def save_cache(data: List[Dict[str, Any]]):
     CACHE_FILE.write_text(json.dumps(data, default=str, ensure_ascii=False, indent=2))
 
-# ── Core helpers ─────────────────────────────────────────────────────────-
+# ── Core helpers ----------------------------------------------------------
 
 def add_item(storage: List[Dict[str, Any]], item: Dict[str, Any]):
     item["group"] = classify_article(item["title"], item.get("raw_text", ""))
@@ -219,11 +219,11 @@ def generate_html_block(storage: List[Dict[str, Any]]) -> str:
 # ── CLI -------------------------------------------------------------------
 
 def cli_main(argv: List[str]):
-    p = argparse.ArgumentParser()
-    p.add_argument("--url")
-    p.add_argument("--img")
-    p.add_argument("--generate-html", action="store_true")
-    args = p.parse_args(argv)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--url")
+    parser.add_argument("--img")
+    parser.add_argument("--generate-html", action="store_true")
+    args = parser.parse_args(argv)
 
     items = load_cache()
     if args.url:
@@ -243,5 +243,78 @@ def cli_main(argv: List[str]):
 # ── Streamlit GUI ---------------------------------------------------------
 
 def gui_main():
-    st.set_page
+    st.set_page_config(page_title="Marcia – Climate News Curator", layout="wide")
+    st.title("📰 Marcia – Climate News Curator")
 
+    if "news_items" not in st.session_state:
+        st.session_state.news_items = load_cache()
+    if "log" not in st.session_state:
+        st.session_state.log: List[Tuple[str, bool]] = []
+
+    def log(msg: str, error: bool = False):
+        st.session_state.log.append((msg, error))
+
+    # Sidebar input
+    with st.sidebar:
+        st.header("Add news item")
+        upload = st.file_uploader("Upload image", type=["png", "jpg", "jpeg", "pdf"])
+        url_input = st.text_input("Paste URL")
+
+        if st.button("Add Image"):
+            if upload is None:
+                log("No image selected.", True)
+            else:
+                item, err = extract_from_image(upload.getvalue())
+                if err:
+                    log(err, True)
+                elif item:
+                    add_item(st.session_state.news_items, item)
+                    log("Image added.")
+
+        if st.button("Add URL"):
+            if not url_input.strip():
+                log("URL field is empty.", True)
+            else:
+                item, err = extract_from_url(url_input.strip())
+                if err:
+                    log(err, True)
+                elif item:
+                    add_item(st.session_state.news_items, item)
+                    log("URL added.")
+
+        st.subheader("Logs")
+        for m, is_err in st.session_state.log:
+            (st.error if is_err else st.success)(m)
+
+    # Main table
+    st.subheader("Current roster")
+    if st.session_state.news_items:
+        tbl = [{
+            "Title": n["title"],
+            "Source": n["source"],
+            "Date": n["date"].strftime("%Y-%m-%d"),
+            "Group": n["group"],
+            "URL": n["url"],
+        } for n in st.session_state.news_items]
+        st.dataframe(tbl, use_container_width=True)
+    else:
+        st.info("No items yet.")
+
+    if st.button("Generate HTML"):
+        html = generate_html_block(st.session_state.news_items)
+        st.code(html, language="html")
+        st.download_button("Download", data=html, file_name="destacados.html", mime="text/html")
+        save_cache(st.session_state.news_items)
+
+# ── Entrypoint ------------------------------------------------------------
+if __name__ == "__main__":
+    if st is None:
+        cli_main(sys.argv[1:])
+    else:
+        gui_main()
+
+# ── Tests -----------------------------------------------------------------
+if __name__ == "__test__":
+    assert classify_article("Opinion: Climate policy", "") == "opinion"
+    assert classify_article("Gobierno presenta nueva regulación", "") == "econpol"
+    assert classify_article("Se inaugura la COP30", "") == "coyuntural"

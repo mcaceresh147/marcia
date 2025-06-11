@@ -1,0 +1,6 @@
+streamlit
+pytesseract
+pillow
+newspaper3k
+beautifulsoup4
+python-dateutil

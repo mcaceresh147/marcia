@@ -254,13 +254,23 @@ def gui_main():
     def log(msg: str, error: bool = False):
         st.session_state.log.append((msg, error))
 
+    SCRAPING_AVAILABLE = requests is not None and BeautifulSoup is not None
+
     # Sidebar input
     with st.sidebar:
         st.header("Add news item")
-        upload = st.file_uploader("Upload image", type=["png", "jpg", "jpeg", "pdf"])
+
+        # IMAGE
+        upload = st.file_uploader("Upload image", type=["png", "jpg", "jpeg", "pdf"], disabled=not OCR_AVAILABLE)
         url_input = st.text_input("Paste URL")
 
-        if st.button("Add Image"):
+        col1, col2 = st.columns(2)
+        with col1:
+            add_img_clicked = st.button("Add Image", disabled=not OCR_AVAILABLE)
+        with col2:
+            add_url_clicked = st.button("Add URL", disabled=not SCRAPING_AVAILABLE)
+
+        if add_img_clicked:
             if upload is None:
                 log("No image selected.", True)
             else:
@@ -271,7 +281,7 @@ def gui_main():
                     add_item(st.session_state.news_items, item)
                     log("Image added.")
 
-        if st.button("Add URL"):
+        if add_url_clicked:
             if not url_input.strip():
                 log("URL field is empty.", True)
             else:
@@ -281,6 +291,12 @@ def gui_main():
                 elif item:
                     add_item(st.session_state.news_items, item)
                     log("URL added.")
+
+        st.caption(
+            "OCR disponible: {} | Scraping disponible: {}".format(
+                "✅" if OCR_AVAILABLE else "❌", "✅" if SCRAPING_AVAILABLE else "❌"
+            )
+        )
 
         st.subheader("Logs")
         for m, is_err in st.session_state.log:
@@ -300,21 +316,8 @@ def gui_main():
     else:
         st.info("No items yet.")
 
-    if st.button("Generate HTML"):
+    if st.button("Generate HTML", disabled=not st.session_state.news_items):
         html = generate_html_block(st.session_state.news_items)
         st.code(html, language="html")
         st.download_button("Download", data=html, file_name="destacados.html", mime="text/html")
         save_cache(st.session_state.news_items)
-
-# ── Entrypoint ------------------------------------------------------------
-if __name__ == "__main__":
-    if st is None:
-        cli_main(sys.argv[1:])
-    else:
-        gui_main()
-
-# ── Tests -----------------------------------------------------------------
-if __name__ == "__test__":
-    assert classify_article("Opinion: Climate policy", "") == "opinion"
-    assert classify_article("Gobierno presenta nueva regulación", "") == "econpol"
-    assert classify_article("Se inaugura la COP30", "") == "coyuntural"

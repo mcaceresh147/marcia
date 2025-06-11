@@ -1,8 +1,11 @@
 streamlit
 requests
+requests_cache
 beautifulsoup4
-newspaper3k
 lxml
 cssselect
+newspaper3k
 python-dateutil
-openai      # opcional
+pytesseract           # opcional local—en la nube se ignorará
+Pillow
+openai                # solo si usarás clasificación GPT

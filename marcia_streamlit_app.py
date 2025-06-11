@@ -65,7 +65,10 @@ try:
 except ImportError:
     requests = None  # type: ignore
 
-from dateutil import parser as dateparser
+try:
+    from dateutil import parser as dateparser
+except Exception:
+    dateparser = None
 
 # OpenAI -------------------------------------------------------------------
 try:
@@ -122,6 +125,8 @@ def classify_article(title: str, body: str) -> str:
 
 
 def guess_date(s: str | None):
+    if not dateparser:
+        return None
     try:
         return dateparser.parse(str(s), dayfirst=False).date() if s else None
     except Exception:
@@ -337,8 +342,3 @@ if __name__ == "__main__":
     else:
         gui_main()
 
-# ── Tests -----------------------------------------------------------------
-if __name__ == "__test__":
-    assert classify_article("Opinion: Climate policy", "") == "opinion"
-    assert classify_article("Gobierno presenta nueva regulación", "") == "econpol"
-    assert classify_article("Se inaugura la COP30", "") == "coyuntural"

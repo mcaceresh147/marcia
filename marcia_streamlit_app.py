@@ -41,13 +41,16 @@ try:
     from PIL import Image
     try:
         pytesseract.get_tesseract_version()
-        OCR_AVAILABLE = True
+        LOCAL_TESS = True
     except TesseractNotFoundError:
-        OCR_AVAILABLE = False
+        LOCAL_TESS = False
 except ImportError:
-    OCR_AVAILABLE = False
+    LOCAL_TESS = False
 
-# Scraping -----------------------------------------------------------------
+ONLINE_OCR_KEY = os.getenv("OCR_SPACE_API_KEY") or (st.secrets.get("OCR_SPACE_API_KEY") if st and hasattr(st, "secrets") else "")
+ONLINE_OCR = bool(ONLINE_OCR_KEY)
+OCR_AVAILABLE = LOCAL_TESS or ONLINE_OCR
+# Scraping ----------------------------------------------------------------- -----------------------------------------------------------------
 try:
     from newspaper import Article
 except ImportError:
@@ -134,9 +137,56 @@ def _open_image(src: Any):
     return Image.open(Path(src))
 
 
+def _ocr_space_fallback(img_bytes: bytes):
+    """Use OCR.space API when Tesseract is absent (free tier up to 1MB)."""
+    api_key = os.getenv("OCR_SPACE_API_KEY", "")
+    if not api_key:
+        return None, "Configura la variable OCR_SPACE_API_KEY para OCR online."
+    if requests is None:
+        return None, "requests no instalado para OCR online."
+    try:
+        resp = requests.post(
+            "https://api.ocr.space/parse/image",
+            files={"file": ("image.png", img_bytes)},
+            data={"language": "spa", "isOverlayRequired": False},
+            headers={"apikey": api_key},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        parsed = resp.json()
+        lines = parsed["ParsedResults"][0]["ParsedText"].splitlines() if parsed.get("ParsedResults") else []
+        lines = [l.strip() for l in lines if l.strip()]
+        if not lines:
+            return None, "OCR online no detectó texto."
+        title = lines[0]
+        date = next((d for l in lines if (d := guess_date(l))), None) or datetime.today().date()
+        return {"title": title, "source": "Desconocido", "date": date, "url": "", "raw_text": "
+".join(lines)}, ""
+    except Exception as e:
+        return None, f"OCR online error: {e}"
+
+
 def extract_from_image(src: Any) -> Tuple[Dict[str, Any] | None, str]:
-    if not OCR_AVAILABLE:
-        return None, "OCR no disponible en el servidor. Usa URL."
+    # Try local Tesseract first
+    if OCR_AVAILABLE:
+        try:
+            img = _open_image(src)
+            txt = pytesseract.image_to_string(img, lang="spa+eng")
+            lines = [l.strip() for l in txt.splitlines() if l.strip()]
+            if not lines:
+                return None, "No se encontró texto legible en la imagen."
+            title = lines[0]
+            date = next((d for l in lines if (d := guess_date(l))), None) or datetime.today().date()
+            return {"title": title, "source": "Desconocido", "date": date, "url": "", "raw_text": txt}, ""
+        except Exception as e:
+            # fallthrough to online OCR
+            pass
+    # Online fallback
+    try:
+        img_bytes = src if isinstance(src, (bytes, bytearray)) else _open_image(src).tobytes()
+    except Exception as e:
+        return None, f"Error reading image: {e}"
+    return _ocr_space_fallback(img_bytes) None, "OCR no disponible en el servidor. Usa URL."
     try:
         img = _open_image(src)
         txt = pytesseract.image_to_string(img, lang="spa+eng")
@@ -255,18 +305,21 @@ def gui_main():
         st.session_state.log.append((msg, error))
 
     SCRAPING_AVAILABLE = requests is not None and BeautifulSoup is not None
+OCR_READY = OCR_AVAILABLE
 
     # Sidebar input
     with st.sidebar:
         st.header("Add news item")
 
         # IMAGE
-        upload = st.file_uploader("Upload image", type=["png", "jpg", "jpeg", "pdf"], disabled=not OCR_AVAILABLE)
+        upload = st.file_uploader("Upload image", type=["png", "jpg", "jpeg", "pdf"], disabled=not OCR_READY)
         url_input = st.text_input("Paste URL")
 
         col1, col2 = st.columns(2)
         with col1:
-            add_img_clicked = st.button("Add Image", disabled=not OCR_AVAILABLE)
+            add_img_clicked = st.button("Add Image", disabled=not OCR_READY)
+        with col2:
+            add_url_clicked = st.button("Add URL", disabled=not SCRAPING_AVAILABLE) = st.button("Add Image", disabled=not OCR_AVAILABLE)
         with col2:
             add_url_clicked = st.button("Add URL", disabled=not SCRAPING_AVAILABLE)
 
@@ -293,44 +346,10 @@ def gui_main():
                     log("URL added.")
 
         st.caption(
-            "OCR disponible: {} | Scraping disponible: {}".format(
-                "✅" if OCR_AVAILABLE else "❌", "✅" if SCRAPING_AVAILABLE else "❌"
+                        st.caption(
+            "OCR local: {} | OCR online: {} | Scraping: {}".format(
+                "✅" if LOCAL_TESS else "❌",
+                "✅" if ONLINE_OCR else "❌",
+                "✅" if SCRAPING_AVAILABLE else "❌",
             )
         )
-
-        st.subheader("Logs")
-        for m, is_err in st.session_state.log:
-            (st.error if is_err else st.success)(m)
-
-    # Main table
-    st.subheader("Current roster")
-    if st.session_state.news_items:
-        tbl = [{
-            "Title": n["title"],
-            "Source": n["source"],
-            "Date": n["date"].strftime("%Y-%m-%d"),
-            "Group": n["group"],
-            "URL": n["url"],
-        } for n in st.session_state.news_items]
-        st.dataframe(tbl, use_container_width=True)
-    else:
-        st.info("No items yet.")
-
-    if st.button("Generate HTML", disabled=not st.session_state.news_items):
-        html = generate_html_block(st.session_state.news_items)
-        st.code(html, language="html")
-        st.download_button("Download", data=html, file_name="destacados.html", mime="text/html")
-        save_cache(st.session_state.news_items)
-
-# ── Entrypoint ------------------------------------------------------------
-if __name__ == "__main__":
-    if st is None:
-        cli_main(sys.argv[1:])
-    else:
-        gui_main()
-
-# ── Tests -----------------------------------------------------------------
-if __name__ == "__test__":
-    assert classify_article("Opinion: Climate policy", "") == "opinion"
-    assert classify_article("Gobierno presenta nueva regulación", "") == "econpol"
-    assert classify_article("Se inaugura la COP30", "") == "coyuntural"

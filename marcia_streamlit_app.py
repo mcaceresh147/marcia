@@ -1,21 +1,22 @@
 """
-Marcia News Curator
-===================
+Marcia News Curator — v2
+=======================
 
-Streamlit GUI + CLI para curar *Destacados de la Semana*.
+*Streamlit GUI* + *CLI* para generar el bloque HTML de **Destacados de la Semana**.
 
 ### Ejecución local
 ```bash
 streamlit run marcia_streamlit_app.py
 ```
 
-### CLI
+### CLI rápido
 ```bash
 python marcia_streamlit_app.py --url https://ejemplo.com
-python marcia_streamlit_app.py --img screenshot.png
+python marcia_streamlit_app.py --img captura.png
 python marcia_streamlit_app.py --generate-html
 ```
-Un archivo oculto `.marcia_cache.json` guarda hasta diez noticias.
+
+Un archivo oculto `.marcia_cache.json` mantiene hasta diez noticias.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-# ── Dependencias opcionales ────────────────────────────────────────────────
+# ── Importaciones opcionales ───────────────────────────────────────────────
 try:
     import streamlit as st  # type: ignore
 except ModuleNotFoundError:
@@ -37,16 +38,25 @@ except ModuleNotFoundError:
 
 import pytesseract
 from PIL import Image
-
-try:
-    from newspaper import Article
-    from bs4 import BeautifulSoup  # type: ignore
-except ImportError:
-    Article = None
-    BeautifulSoup = None
-
 from dateutil import parser as dateparser
 
+# Noticias via newspaper3k → fallback requests+BS4
+try:
+    from newspaper import Article
+except ImportError:
+    Article = None
+
+try:
+    from bs4 import BeautifulSoup  # type: ignore
+except ImportError:
+    BeautifulSoup = None
+
+try:
+    import requests
+except ImportError:
+    requests = None  # fallback no disponible
+
+# OpenAI opcional
 try:
     import openai  # type: ignore
 
@@ -69,10 +79,10 @@ CACHE_FILE = Path(".marcia_cache.json")
 # ── Utilidades ─────────────────────────────────────────────────────────────
 
 def classify_article(title: str, body: str) -> str:
-    """ECONPOL / COYUNTURAL / OPINION"""
+    """Return 'econpol', 'coyuntural' or 'opinion'."""
     if OPENAI_AVAILABLE:
         prompt = (
-            "Classify the following climate‑related news headline + excerpt as ECONPOL, COYUNTURAL or OPINION.\n"
+            "Classify climate‑related news as ECONPOL, COYUNTURAL or OPINION.\n"
             f"Headline: {title}\nExcerpt: {body[:400]}"
         )
         try:
@@ -86,10 +96,10 @@ def classify_article(title: str, body: str) -> str:
             if lbl in ("ECONPOL", "COYUNTURAL", "OPINION"):
                 return lbl.lower()
         except Exception:
-            pass  # Fallback heuristics
-    if re.search(r"\b(opinión|opinion|column|editorial)\b", title, flags=re.I):
+            pass
+    if re.search(r"\b(opinión|opinion|column|editorial)\b", title, re.I):
         return "opinion"
-    if re.search(r"\b(finanzas|mercado|banco|gobierno|economía|impuesto|policy|política|regulación)\b", title, flags=re.I):
+    if re.search(r"\b(finanzas|mercado|banco|gobierno|economía|impuesto|policy|política|regulación)\b", title, re.I):
         return "econpol"
     return "coyuntural"
 
@@ -111,49 +121,81 @@ def _open_image(src: Any):
 # ── Extractores ────────────────────────────────────────────────────────────
 
 def extract_from_image(src: Any) -> Tuple[Dict[str, Any] | None, str]:
-    """Devuelve (item, error_msg)."""
+    """OCR → dict | error."""
     try:
         img = _open_image(src)
         txt = pytesseract.image_to_string(img, lang="spa+eng")
+    except pytesseract.TesseractNotFoundError:
+        return None, "Tesseract OCR no está instalado en el servidor."
     except Exception as e:
-        return None, f"OCR failed: {e}"
+        return None, f"OCR error: {e}"
 
     lines = [l.strip() for l in txt.splitlines() if l.strip()]
     if not lines:
-        return None, "Could not read any text in the image."
+        return None, "No se encontró texto legible en la imagen."
     title = lines[0]
     date = next((d for l in lines if (d := guess_date(l))), None) or datetime.today().date()
-    item = {
+    return {
         "title": title,
         "source": "Desconocido",
         "date": date,
         "url": "",
         "raw_text": txt,
-    }
-    return item, ""
+    }, ""
+
+
+def _scrape_fallback(url: str):
+    """Scrape with requests + BeautifulSoup when newspaper3k fails."""
+    if requests is None or BeautifulSoup is None:
+        return None, "Dependencias de scraping no instaladas."
+    try:
+        headers = {"User-Agent": "Mozilla/5.0"}
+        r = requests.get(url, headers=headers, timeout=10)
+        r.raise_for_status()
+        soup = BeautifulSoup(r.text, "html.parser")
+        title_tag = soup.find("meta", property="og:title") or soup.find("title")
+        title = title_tag["content"] if title_tag and title_tag.get("content") else title_tag.get_text(strip=True)
+        body = soup.get_text(" ", strip=True)[:2000]
+        site = soup.find("meta", property="og:site_name")
+        source = site["content"] if site and site.get("content") else url.split("/")[2]
+        date_meta = soup.find("meta", property="article:published_time")
+        pub_date = guess_date(date_meta["content"] if date_meta and date_meta.get("content") else None) or datetime.today().date()
+        return {
+            "title": title or "Untitled",
+            "source": source,
+            "date": pub_date,
+            "url": url,
+            "raw_text": body,
+        }, ""
+    except Exception as e:
+        return None, f"Scraping fallback error: {e}"
 
 
 def extract_from_url(url: str) -> Tuple[Dict[str, Any] | None, str]:
     if Article is None:
-        return None, "newspaper3k is not installed."
+        return _scrape_fallback(url)
     try:
         art = Article(url, language="es")
         art.download(); art.parse()
-    except Exception as e:
-        return None, f"Download error: {e}"
+    except Exception:
+        return _scrape_fallback(url)
 
     title = art.title or "Untitled"
     text = art.text or ""
     soup = BeautifulSoup(art.html, "html.parser") if BeautifulSoup else None
-    src = (
+    source = (
         soup.find("meta", property="og:site_name").get("content")  # type: ignore[attr-defined]
         if soup and soup.find("meta", property="og:site_name") else url.split("/")[2]
     )
     date_meta = soup.find("meta", property="article:published_time") if soup else None  # type: ignore[attr-defined]
     pub_date = guess_date(date_meta.get("content") if date_meta else None) or guess_date(art.publish_date) or datetime.today().date()
-
-    item = {"title": title, "source": src, "date": pub_date, "url": url, "raw_text": text}
-    return item, ""
+    return {
+        "title": title,
+        "source": source,
+        "date": pub_date,
+        "url": url,
+        "raw_text": text,
+    }, ""
 
 # ── Persistencia ───────────────────────────────────────────────────────────
 
@@ -214,6 +256,11 @@ def gui_main():
 
     if "news_items" not in st.session_state:
         st.session_state.news_items = load_cache()
+    if "log" not in st.session_state:
+        st.session_state.log = []  # type: ignore[attr-defined]
+
+    def log(msg: str, error=False):  # helper dentro de GUI
+        st.session_state.log.append((msg, error))  # type: ignore[attr-defined]
 
     with st.sidebar:
         st.subheader("Add news item")
@@ -224,52 +271,4 @@ def gui_main():
             if upload is None:
                 st.warning("No image selected.")
             else:
-                item, err = extract_from_image(upload.getvalue())
-                if err:
-                    st.error(err)
-                else:
-                    add_item(st.session_state.news_items, item)
-                    st.success("Image added.")
-
-        if st.button("Add URL"):
-            if not url_input.strip():
-                st.warning("URL field is empty.")
-            else:
-                item, err = extract_from_url(url_input.strip())
-                if err:
-                    st.error(err)
-                else:
-                    add_item(st.session_state.news_items, item)
-                    st.success("URL added.")
-
-    st.subheader("Current roster")
-    df = [
-        {
-            "Title": n["title"],
-            "Source": n["source"],
-            "Date": n["date"].strftime("%Y-%m-%d"),
-            "Group": n["group"],
-            "URL": n["url"],
-        }
-        for n in st.session_state.news_items
-    ]
-    st.dataframe(df, use_container_width=True)
-
-    if st.button("Generate HTML"):
-        html = generate_html_block(st.session_state.news_items)
-        st.code(html, language="html")
-        st.download_button("Download", data=html, file_name="destacados.html", mime="text/html")
-        save_cache(st.session_state.news_items)
-
-# ── Entrypoint ─────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    if st is None:
-        cli_main(sys.argv[1:])
-    else:
-        gui_main()
-
-# ── Test ───────────────────────────────────────────────────────────────────
-if __name__ == "__test__":
-    assert classify_article("Opinion: Chile’s carbon markets", "") == "opinion"
-    assert classify_article("Gobierno presenta nueva regulación financiera", "") == "econpol"
-    assert classify
+                item, err

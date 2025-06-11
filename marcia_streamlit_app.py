@@ -73,9 +73,8 @@ try:
 except ImportError:
     openai = None  # type: ignore
 
-api_key = (
-    os.getenv("OPENAI_API_KEY")
-    or (st.secrets["OPENAI_API_KEY"] if st and "OPENAI_API_KEY" in st.secrets else "")
+api_key = os.getenv("OPENAI_API_KEY") or (
+    st.secrets.get("OPENAI_API_KEY", "") if st else ""
 )
 OPENAI_AVAILABLE = bool(openai and api_key)
 if OPENAI_AVAILABLE:

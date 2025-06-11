@@ -6,6 +6,7 @@ lxml
 cssselect
 newspaper3k
 python-dateutil
-pytesseract           # opcional local—en la nube se ignorará
 Pillow
-openai                # solo si usarás clasificación GPT
+# opcionales
+openai          # si usas clasificación GPT
+pytesseract     # solo útil en tu PC local

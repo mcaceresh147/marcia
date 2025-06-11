@@ -1,6 +1,8 @@
 streamlit
-pytesseract
-pillow
-newspaper3k
+requests
 beautifulsoup4
+newspaper3k
+lxml
+cssselect
 python-dateutil
+openai      # opcional

@@ -321,3 +321,16 @@ def gui_main():
         st.code(html, language="html")
         st.download_button("Download", data=html, file_name="destacados.html", mime="text/html")
         save_cache(st.session_state.news_items)
+
+# ── Entrypoint ------------------------------------------------------------
+if __name__ == "__main__":
+    if st is None:
+        cli_main(sys.argv[1:])
+    else:
+        gui_main()
+
+# ── Tests -----------------------------------------------------------------
+if __name__ == "__test__":
+    assert classify_article("Opinion: Climate policy", "") == "opinion"
+    assert classify_article("Gobierno presenta nueva regulación", "") == "econpol"
+    assert classify_article("Se inaugura la COP30", "") == "coyuntural"

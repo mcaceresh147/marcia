@@ -73,10 +73,13 @@ try:
 except ImportError:
     openai = None  # type: ignore
 
-api_key = (
-    os.getenv("OPENAI_API_KEY")
-    or (st.secrets["OPENAI_API_KEY"] if st and "OPENAI_API_KEY" in st.secrets else "")
-)
+api_key_env = os.getenv("OPENAI_API_KEY")
+if not api_key_env and st:
+    try:
+        api_key_env = st.secrets["OPENAI_API_KEY"]
+    except Exception:
+        api_key_env = ""
+api_key = api_key_env
 OPENAI_AVAILABLE = bool(openai and api_key)
 if OPENAI_AVAILABLE:
     openai.api_key = api_key
@@ -192,9 +195,14 @@ def extract_from_url(url: str) -> Tuple[Dict[str, Any] | None, str]:
 # ── Persistencia ----------------------------------------------------------
 
 def load_cache() -> List[Dict[str, Any]]:
-    if CACHE_FILE.exists():
-        return json.loads(CACHE_FILE.read_text())
-    return []
+    if not CACHE_FILE.exists():
+        return []
+    data = json.loads(CACHE_FILE.read_text())
+    for item in data:
+        d = item.get("date")
+        if isinstance(d, str):
+            item["date"] = guess_date(d) or datetime.today().date()
+    return data
 
 
 def save_cache(data: List[Dict[str, Any]]):
